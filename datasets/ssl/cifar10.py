@@ -75,7 +75,7 @@ class SSL_CIFAR10(pl.LightningDataModule):
         loaderᵤ = torch.utils.data.DataLoader(
             self.cifar10_trainᵤ, self.batch_sizeᵤ, shuffle=True,
             num_workers=self.num_workers, pin_memory=self.pin_memory)
-        return [loaderₗ, loaderᵤ]
+        return {'labeled': loaderₗ, 'unlabeled': loaderᵤ}
 
     def val_dataloader(self):
         batch_size = max(self.batch_sizeₗ, self.batch_sizeᵤ) * 2
