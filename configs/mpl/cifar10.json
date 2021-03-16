@@ -1,6 +1,5 @@
 {
     "model": {
-        "name": "meta_pseudo_labels",
         "backbone": "wide_resnet28_2",
         "num_classes": 10,
         "batch_norm_decay": 0.99,
