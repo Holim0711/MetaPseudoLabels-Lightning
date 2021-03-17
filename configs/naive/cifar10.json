@@ -4,7 +4,7 @@
         "num_classes": 10
     },
     "dataset": {
-        "name": "cifar10",
+        "name": "ssl_cifar10",
         "root": "data/cifar10",
         "num_labeled": 4000,
         "batch_size": {
@@ -12,18 +12,20 @@
             "unlabeled": 128
         }
     },
-    "optimizer": {
-        "name": "SGD",
-        "lr": 0.3,
-        "momentum": 0.9,
-        "weight_decay": 0.0005,
-        "nesterov": false
-    },
-    "scheduler": {
-        "name": "CosineAnnealingWithWarmUp",
-        "interval": "step",
-        "T_max": 1000000,
-        "T_warmup": 2000
+    "optim": {
+        "optimizer": {
+            "name": "SGD",
+            "lr": 0.3,
+            "momentum": 0.9,
+            "weight_decay": 0.0005,
+            "nesterov": false
+        },
+        "scheduler": {
+            "name": "CosineAnnealingWarmUp",
+            "T_max": 2000,
+            "T_warm": 1000
+        },
+        "interval": "step"
     },
     "trainer": {
         "max_steps": 1000000

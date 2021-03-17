@@ -2,24 +2,28 @@ import os
 import sys
 import json
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 
 from models import *
-from datasets import SSL_CIFAR10
+from datasets import select_datasets
 from transforms.cifar10 import train_transform, valid_transform
 
 
 def train(hparams, ckpt_path=None):
-    dm = CIFAR10SSL(root='data/cifar10', **hparams['dataset'])
-    dm.train_transform = train_transform
+    dm = select_datasets(**hparams['dataset'])
+    dm.train_transformₗ = train_transform
+    dm.train_transformᵤ = train_transform
     dm.valid_transform = valid_transform
 
     model = NaiveClassifier(**hparams)
 
     logger = TensorBoardLogger("logs", hparams['name'])
 
-    callbacks = [ModelCheckpoint(monitor='val/acc', save_last=True)]
+    callbacks = [
+        ModelCheckpoint(monitor='val/acc', save_last=True),
+        LearningRateMonitor(logging_interval=hparams['optim']['interval']),
+    ]
 
     trainer = pl.Trainer(
         gpus=1,

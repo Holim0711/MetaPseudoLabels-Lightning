@@ -131,3 +131,4 @@ dmypy.json
 # for this project
 .vscode
 data/cifar10
+logs/

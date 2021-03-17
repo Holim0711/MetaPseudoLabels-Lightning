@@ -31,19 +31,19 @@ def index_split(labels, num_labeled):
 class SSL_CIFAR10(pl.LightningDataModule):
 
     def __init__(self, root, num_labeled=4000, batch_size=1,
-                 labeled_transform=None, unlabeled_transform=None,
-                 valid_transform=None, num_workers=None, pin_memory=True):
+                 num_workers=None, pin_memory=True):
         super().__init__()
         self.root = root
         self.num_labeled = num_labeled
-        if isinstance(batch_size, int):
+        if isinstance(batch_size, dict):
+            self.batch_sizeₗ = batch_size['labeled']
+            self.batch_sizeᵤ = batch_size['unlabeled']
+        else:
             self.batch_sizeₗ = batch_size
             self.batch_sizeᵤ = batch_size
-        else:
-            self.batch_sizeₗ, self.batch_sizeᵤ = batch_size
-        self.train_transformₗ = labeled_transform
-        self.train_transformᵤ = unlabeled_transform
-        self.valid_transform = valid_transform
+        self.train_transformₗ = None
+        self.train_transformᵤ = None
+        self.valid_transform = None
         self.num_workers = num_workers if num_workers else os.cpu_count()
         self.pin_memory = pin_memory
 

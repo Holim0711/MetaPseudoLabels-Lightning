@@ -13,7 +13,8 @@ class NaiveClassifier(pl.LightningModule):
 
         self.model = get_model(
             self.hparams.model['backbone'],
-            self.hparams.model['num_classes'])
+            self.hparams.model['num_classes'],
+            pretrained=False)
         self.criterion = torch.nn.CrossEntropyLoss()
         self.train_acc = pl.metrics.Accuracy()
         self.valid_acc = pl.metrics.Accuracy()
@@ -74,6 +75,12 @@ class NaiveClassifier(pl.LightningModule):
         self.test_acc.reset()
 
     def configure_optimizers(self):
-        optim = get_optim(self.parameters(), **self.hparams.optimizer)
-        sched = get_sched(optim, **self.hparams.scheduler)
-        return [optim], [sched]
+        optim = get_optim(self.parameters(), **self.hparams.optim['optimizer'])
+        sched = get_sched(optim, **self.hparams.optim['scheduler'])
+        return {
+            'optimizer': optim,
+            'lr_scheduler': {
+                'scheduler': sched,
+                'interval': self.hparams.optim['interval'],
+            },
+        }
