@@ -2,6 +2,7 @@
     "model": {
         "backbone": "wide_resnet28_2",
         "num_classes": 10,
+        "pretrained": false,
         "batch_norm_decay": 0.99,
         "label_smoothing": {
             "student": 0.1,
@@ -15,7 +16,7 @@
         "UDA_temperatrue": 0.8
     },
     "dataset": {
-        "name": "cifar10",
+        "name": "ssl_cifar10",
         "root": "data/cifar10",
         "num_labeled": 4000,
         "batch_size": {
@@ -23,37 +24,39 @@
             "unlabeled": 128
         }
     },
-    "optimizer": {
+    "optim": {
         "student": {
-            "name": "SGD",
-            "lr": 0.3,
-            "momentum": 0.9,
-            "weight_decay": 0.0005,
-            "nesterov": false
+            "optimizer": {
+                "name": "SGD",
+                "lr": 0.3,
+                "momentum": 0.9,
+                "weight_decay": 0.0005,
+                "nesterov": false
+            },
+            "scheduler": {
+                "name": "CosineAnnealingWarmUp",
+                "T_max": 1000000,
+                "T_warm": 2000
+            },
+            "interval": "step"
         },
         "teacher": {
-            "name": "SGD",
-            "lr": 0.125,
-            "momentum": 0.9,
-            "weight_decay": 0.0005,
-            "nesterov": false
-        }
+            "optimizer": {
+                "name": "SGD",
+                "lr": 0.125,
+                "momentum": 0.9,
+                "weight_decay": 0.0005,
+                "nesterov": false
+            },
+            "scheduler":{
+                "name": "CosineAnnealingWarmUp",
+                "T_max": 1000000,
+                "T_warm": 2000    
+            },
+            "interval": "step"
+         }
     },
-    "scheduler": {
-        "student": {
-            "name": "CosineAnnealingWithWarmUp",
-            "interval": "step",
-            "T_max": 1000000,
-            "T_warmup": 2000
-        },
-        "teacher": {
-            "name": "CosineAnnealingWithWarmUp",
-            "interval": "step",
-            "T_max": 1000000,
-            "T_warmup": 2000
-        }
-    },
-    "trainer": {
+   "trainer": {
         "max_steps": 1000000
     }
 }

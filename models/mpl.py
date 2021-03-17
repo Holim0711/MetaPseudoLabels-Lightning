@@ -13,10 +13,12 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
 
         self.teacher = get_model(
             self.hparams.model['backbone'],
-            self.hparams.model['num_classes'])
+            self.hparams.model['num_classes'],
+            pretrained=self.hparams.model['pretrained'])
         self.student = get_model(
             self.hparams.model['backbone'],
-            self.hparams.model['num_classes'])
+            self.hparams.model['num_classes'],
+            pretrained=self.hparams.model['pretrained'])
         self.criterion = torch.nn.CrossEntropyLoss()
         self.train_acc = pl.metrics.Accuracy()
         self.valid_acc = pl.metrics.Accuracy()
@@ -25,47 +27,40 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
     def forward(self, x):
         return self.student(x).softmax(dim=1)
 
-    def training_step(self, batch, batch_idx):
-        opt1, opt2 = self.optimizers()
+    def training_step(self, batch, batch_idx, optimizer_idx):
+        if optimizer_idx == 0:
+            (xᵤ, rᵤ), _ = batch['unlabeled']
 
-        x, y = batch[0]
-        with torch.no_grad():
-            probs = self.teacher(x).softmax(dim=1)
-            prob_dist = torch.distributions.Categorical(probs)
-            y_pseudo = prob_dist.sample()
-        ŷ = self.student(x)
-        loss = self.criterion(ŷ, y_pseudo)
+            self.teacher.eval()
+            with torch.no_grad():
+                self.tyᵤ = self.teacher(xᵤ).argmax(dim=1)
+            self.teacher.train()
 
-        opt1.zero_grad()
-        self.manual_backward(loss)
-        opt1.step()
+            sŷᵤ = self.student(xᵤ)
+            loss = self.criterion(sŷᵤ, self.tyᵤ)
+            self.student_lossᵤ = loss.item()
+            return {'loss': loss}
+        elif optimizer_idx == 1:
+            #(xᵤ, rᵤ), _ = batch['unlabeled']
+            xₗ, yₗ = batch['labeled']
+            """
+            self.student.eval()
+            with torch.no_grad():
+                sŷₗ = self.student(xₗ)
+                self.student_lossₗ = self.criterion(sŷₗ, yₗ).item()
+                print(sŷₗ.softmax(dim=1))
+                self.train_acc.update(sŷₗ.softmax(dim=1), yₗ)
+            self.student.train()
 
-        g1 = [x.grad.new_tensor(device='cpu')
-              for x in self.student.parameters()]
+            h = self.student_lossᵤ - self.student_lossₗ
 
-        x, y = batch[1]
-        self.student.eval()
-        ŷ = self.student(x)
-        self.student.train()
-        loss = self.criterion(ŷ, y)
-        self.train_acc.update(ŷ.softmax(dim=1), y)
-
-        opt1.zero_grad()
-        self.manual_backward(loss)
-
-        g2 = [x.grad.new_tensor(device='cpu')
-              for x in self.student.parameters()]
-
-        h = [(x * y).sum() for x, y in zip(g1, g2)]
-
-        x, y = batch['noisy']
-        ŷ = self.teacher(x)
-        loss = self.h * self.criterion(ŷ, y_pseudo)
-
-        opt2.zero_grad()
-        self.manual_backward(loss)
-        opt2.step()
-
+            tŷᵤ = self.teacher(xᵤ)
+            loss_mpl = h * self.criterion(tŷᵤ, self.tyᵤ)
+            """
+            tŷₗ = self.teacher(xₗ)
+            loss_sup = self.criterion(tŷₗ, yₗ)
+            return {'loss': loss_sup}
+    """
     def training_epoch_end(self, outputs):
         acc = self.train_acc.compute()
         self.log_dict({
@@ -73,10 +68,11 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             'step': self.current_epoch,
         })
         self.train_acc.reset()
+    """
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
-        ŷ = self.model(x)
+        ŷ = self.student(x)
         loss = self.criterion(ŷ, y)
         self.valid_acc.update(ŷ.softmax(dim=1), y)
         return {'loss': loss}
@@ -93,7 +89,7 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         x, y = batch
-        ŷ = self.model(x)
+        ŷ = self.student(x)
         loss = self.criterion(ŷ, y)
         self.test_acc.update(ŷ.softmax(dim=1), y)
         return {'loss': loss}
@@ -114,3 +110,25 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
         optim2 = get_optim(self.teacher.parameters(), **self.hparams.optimizer)
         sched2 = get_sched(optim2, **self.hparams.scheduler)
         return [optim1, optim2], [sched1, sched2]
+
+    def configure_optimizers(self):
+        optim1 = get_optim(self.student.parameters(), **self.hparams.optim['student']['optimizer'])
+        sched1 = get_sched(optim1, **self.hparams.optim['student']['scheduler'])
+        optim2 = get_optim(self.teacher.parameters(), **self.hparams.optim['teacher']['optimizer'])
+        sched2 = get_sched(optim2, **self.hparams.optim['teacher']['scheduler'])
+        return [
+            {
+                'optimizer': optim1,
+                'lr_scheduler': {
+                    'scheduler': sched1,
+                    'interval': self.hparams.optim['student']['interval'],
+                },
+            },
+            {
+                'optimizer': optim2,
+                'lr_scheduler': {
+                    'scheduler': sched2,
+                    'interval': self.hparams.optim['teacher']['interval'],
+                },
+            },
+        ]
