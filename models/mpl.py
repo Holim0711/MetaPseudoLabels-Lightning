@@ -122,11 +122,17 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
         student_loss = torch.stack([x['loss'] for x in outputs[0]]).mean()
         teacher_acc = self.teacher_train_acc.compute()
         student_acc = self.student_train_acc.compute()
+        loss_sup = torch.stack([x['loss_sup'] for x in outputs[1]]).mean()
+        loss_mpl = torch.stack([x['loss_mpl'] for x in outputs[1]]).mean()
+        loss_uda = torch.stack([x['loss_uda'] for x in outputs[1]]).mean()
         self.log_dict({
             'train/loss': student_loss,
             'train/acc': student_acc,
             'train/teacher/loss': teacher_loss,
             'train/teacher/acc': teacher_acc,
+            'detail/loss/sup': loss_sup,
+            'detail/loss/mpl': loss_mpl,
+            'detail/loss/uda': loss_uda,
             'step': self.current_epoch,
         })
         self.teacher_train_acc.reset()
