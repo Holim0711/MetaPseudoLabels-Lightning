@@ -101,13 +101,13 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
 
             ʳzᵤ = self.teacher(ʳxᵤ)
             loss_uda = self.UDA_CE(ᵗzᵤ, ʳzᵤ)
-            uda_factor = self.hparams.UDA['factor'] * min(
-                1., self.global_step / self.hparams.UDA['warmup_step'])
+            uda_factor = self.hparams.model['UDA']['factor'] * min(
+                1., self.global_step / self.hparams.model['UDA']['warmup_step'])
 
             ᵗzₗ = self.teacher(xₗ)
             loss_sup = self.LS_CE(ᵗzₗ, yₗ)
 
-            self.teacher_train_acc.update(ᵗʷzₗ.softmax(dim=1), yₗ)
+            self.teacher_train_acc.update(ᵗzₗ.softmax(dim=1), yₗ)
             return {
                 'loss': loss_sup + loss_mpl + uda_factor * loss_uda,
                 'loss_sup': loss_sup,
@@ -135,10 +135,10 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x, y = batch
         ᵗz = self.teacher(x)
-        ᵗloss = self.criterion(ᵗz, y)
+        ᵗloss = self.CE(ᵗz, y)
         self.teacher_valid_acc.update(ᵗz.softmax(dim=1), y)
         ˢz = self.student(x)
-        ˢloss = self.criterion(ˢz, y)
+        ˢloss = self.CE(ˢz, y)
         self.student_valid_acc.update(ˢz.softmax(dim=1), y)
         return {'teacher_loss': ᵗloss, 'student_loss': ˢloss}
 
@@ -160,7 +160,7 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         x, y = batch
         ŷ = self.student(x)
-        loss = self.criterion(ŷ, y)
+        loss = self.CE(ŷ, y)
         self.test_acc.update(ŷ.softmax(dim=1), y)
         return {'loss': loss}
 
@@ -178,15 +178,19 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
         no_decay = ['bn']
         teacher_parameters = [
             {'params': [p for n, p in self.teacher.named_parameters() if not any(
-                nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
+                nd in n for nd in no_decay)],
+             'weight_decay': self.hparams.optim['teacher']['optimizer']['weight_decay']},
             {'params': [p for n, p in self.teacher.named_parameters() if any(
-                nd in n for nd in no_decay)], 'weight_decay': 0.0},
+                nd in n for nd in no_decay)],
+             'weight_decay': 0.0},
         ]
         student_parameters = [
             {'params': [p for n, p in self.student.named_parameters() if not any(
-                nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
+                nd in n for nd in no_decay)],
+             'weight_decay': self.hparams.optim['teacher']['optimizer']['weight_decay']},
             {'params': [p for n, p in self.student.named_parameters() if any(
-                nd in n for nd in no_decay)], 'weight_decay': 0.0},
+                nd in n for nd in no_decay)],
+             'weight_decay': 0.0},
         ]
         # TODO: student wait...
         optim1 = get_optim(student_parameters, **self.hparams.optim['student']['optimizer'])
