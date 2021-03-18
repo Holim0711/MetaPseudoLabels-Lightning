@@ -5,7 +5,7 @@ from holim_lightning.optimizers import get_optim
 from holim_lightning.schedulers import get_sched
 
 
-class SmoothedCrossEntropy(torch.nn.Module):
+class LabelSmoothedCrossEntropy(torch.nn.Module):
     def __init__(self, alpha=0.1):
         super().__init__()
         self.alpha = alpha
@@ -46,68 +46,76 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             self.hparams.model['backbone'],
             self.hparams.model['num_classes'],
             pretrained=self.hparams.model['pretrained'])
-        self.criterion = SmoothedCrossEntropy()
-        self.uda_criterion = UDACrossEntropy()
+        self.CE = torch.nn.CrossEntropyLoss()
+        self.LS_CE = LabelSmoothedCrossEntropy()
+        self.UDA_CE = UDACrossEntropy()
         self.teacher_train_acc = pl.metrics.Accuracy()
         self.student_train_acc = pl.metrics.Accuracy()
         self.teacher_valid_acc = pl.metrics.Accuracy()
         self.student_valid_acc = pl.metrics.Accuracy()
         self.test_acc = pl.metrics.Accuracy()
+        self.temp = {}
 
     def forward(self, x):
         return self.student(x).softmax(dim=1)
 
     def training_step(self, batch, batch_idx, optimizer_idx):
         if optimizer_idx == 0:
-            (ʷxₗ, ˢxₗ), yₗ = batch['labeled']
-            xᵤ, _ = batch['unlabeled']
+            xₗ, yₗ = batch['labeled']
+            (xᵤ, ʳxᵤ), _ = batch['unlabeled']
 
             self.student.eval()
             with torch.no_grad():
-                ˢzₗ = self.student(ʷxₗ)
-                ˢloss_old = self.criterion(ˢzₗ, yₗ)
+                ˢzₗ = self.student(xₗ)
+                ˢlossₗ = self.CE(ˢzₗ, yₗ)
             self.student.train()
+            self.temp['student_loss_l_old'] = ˢlossₗ.item()
+            self.student_train_acc.update(ˢzₗ.softmax(dim=1), yₗ)
 
             self.teacher.eval()
             with torch.no_grad():
                 ᵗỹᵤ = self.teacher(xᵤ).softmax(dim=1)
                 ᵗyᵤ = torch.distributions.Categorical(ᵗỹᵤ).sample()
             self.teacher.train()
+            self.temp['pseudo_labels'] = ᵗyᵤ
 
             ˢzᵤ = self.student(xᵤ)
-            loss = self.criterion(ˢzᵤ, ᵗyᵤ)
-
-            self.temp = {
-                'pseudo_labels': ᵗyᵤ,
-                'student_loss_old': ˢloss_old,
-            }
+            loss = self.LS_CE(ˢzᵤ, ᵗyᵤ)
             return {'loss': loss, **self.temp}
+
         elif optimizer_idx == 1:
-            (ʷxₗ, ˢxₗ), yₗ = batch['labeled']
-            xᵤ, _ = batch['unlabeled']
+            xₗ, yₗ = batch['labeled']
+            (xᵤ, ʳxᵤ), _ = batch['unlabeled']
 
             self.student.eval()
             with torch.no_grad():
-                ˢʷzₗ = self.student(ʷxₗ)
-                ˢloss_new = self.criterion(ˢʷzₗ, yₗ)
+                ˢzₗ = self.student(xₗ)
+                ˢlossₗ = self.CE(ˢzₗ, yₗ)
             self.student.train()
-            self.student_train_acc.update(ˢʷzₗ.softmax(dim=1), yₗ)
+            self.temp['student_loss_l_new'] = ˢlossₗ.item()
 
-            h = self.temp['student_loss_old'] - ˢloss_new
+            h = self.temp['student_loss_l_old'] - ˢlossₗ
 
             ᵗzᵤ = self.teacher(xᵤ)
-            loss_mpl = h * self.criterion(ᵗzᵤ, self.temp['pseudo_labels'])
+            loss_mpl = h * self.CE(ᵗzᵤ, self.temp['pseudo_labels'])
 
-            ᵗʷzₗ = self.teacher(ʷxₗ)
-            loss_sup = self.criterion(ᵗʷzₗ, yₗ)
+            ʳzᵤ = self.teacher(ʳxᵤ)
+            loss_uda = self.UDA_CE(ᵗzᵤ, ʳzᵤ)
+            uda_factor = self.hparams.UDA['factor'] * min(
+                1., self.global_step / self.hparams.UDA['warmup_step'])
 
-            ᵗˢzₗ = self.teacher(ˢxₗ)
-            loss_uda = self.uda_criterion(ᵗʷzₗ, ᵗˢzₗ)
-            loss_uda *= min(1., self.global_step / self.hparams.UDA['warmup_step'])
-            loss_uda *= self.hparams.UDA['factor']
+            ᵗzₗ = self.teacher(xₗ)
+            loss_sup = self.LS_CE(ᵗzₗ, yₗ)
 
             self.teacher_train_acc.update(ᵗʷzₗ.softmax(dim=1), yₗ)
-            return {'loss': loss_mpl + loss_sup + loss_uda}
+            return {
+                'loss': loss_sup + loss_mpl + uda_factor * loss_uda,
+                'loss_sup': loss_sup,
+                'loss_mpl': loss_mpl,
+                'loss_uda': loss_uda,
+                'uda_factor': uda_factor,
+                **self.temp
+            }
 
     def training_epoch_end(self, outputs):
         teacher_loss = torch.stack([x['loss'] for x in outputs[1]]).mean()
@@ -189,6 +197,7 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             {
                 'optimizer': optim1,
                 'lr_scheduler': {
+                    'name': "lr/student",
                     'scheduler': sched1,
                     'interval': self.hparams.optim['student']['interval'],
                 },
@@ -196,6 +205,7 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             {
                 'optimizer': optim2,
                 'lr_scheduler': {
+                    'name': "lr/teacher",
                     'scheduler': sched2,
                     'interval': self.hparams.optim['teacher']['interval'],
                 },
