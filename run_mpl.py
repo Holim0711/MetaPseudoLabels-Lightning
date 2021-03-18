@@ -13,8 +13,8 @@ from transforms.twin import NqTwinTransform
 
 def train(hparams, ckpt_path=None):
     dm = select_datasets(**hparams['dataset'])
-    dm.train_transformₗ = train_transform
-    dm.train_transformᵤ = NqTwinTransform(train_transform, rand_transform)
+    dm.train_transformₗ = NqTwinTransform(train_transform, rand_transform)
+    dm.train_transformᵤ = train_transform
     dm.valid_transform = valid_transform
 
     model = MetaPseudoLabelsClassifier(**hparams)

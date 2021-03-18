@@ -12,8 +12,12 @@
             "student": 0.35, 
             "teacher": 0.5
         },
-        "UDA_factor": 1.0,
-        "UDA_temperatrue": 0.8
+        "UDA": {
+            "threshold": 0.8,
+            "temperatrue": 0.8,
+            "factor": 1.0,
+            "warmup_step": 5000
+        }
     },
     "dataset": {
         "name": "ssl_cifar10",
@@ -28,14 +32,14 @@
         "student": {
             "optimizer": {
                 "name": "SGD",
-                "lr": 0.3,
+                "lr": 0.05,
                 "momentum": 0.9,
                 "weight_decay": 0.0005,
-                "nesterov": false
+                "nesterov": true
             },
             "scheduler": {
                 "name": "CosineAnnealingWarmUp",
-                "T_max": 1000000,
+                "T_max": 300000,
                 "T_warm": 2000
             },
             "interval": "step"
@@ -43,20 +47,20 @@
         "teacher": {
             "optimizer": {
                 "name": "SGD",
-                "lr": 0.125,
+                "lr": 0.05,
                 "momentum": 0.9,
                 "weight_decay": 0.0005,
-                "nesterov": false
+                "nesterov": true
             },
             "scheduler":{
                 "name": "CosineAnnealingWarmUp",
-                "T_max": 1000000,
+                "T_max": 300000,
                 "T_warm": 2000    
             },
             "interval": "step"
          }
     },
    "trainer": {
-        "max_steps": 1000000
+        "max_steps": 300000
     }
 }
