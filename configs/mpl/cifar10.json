@@ -40,7 +40,8 @@
             "scheduler": {
                 "name": "CosineAnnealingWarmUp",
                 "T_max": 300000,
-                "T_warm": 2000
+                "T_warm": 5000,
+                "T_mute": 3000
             },
             "interval": "step"
         },
