@@ -95,8 +95,8 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             self.temp['student_loss_l_new'] = ˢlossₗ.item()
 
             h = self.temp['student_loss_l_old'] - ˢlossₗ
-            self.h = 0.99 * self.h + 0.01 * h
-            h = h - self.h
+            self.temp['h'] = 0.99 * self.temp['h'] + 0.01 * h
+            h = h - self.temp['h']
 
             self.teacher.eval()
             with torch.no_grad():
@@ -117,7 +117,7 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
 
             self.teacher_train_acc.update(ᵗzₗ.softmax(dim=1), yₗ)
             self.log_dict({
-                'detail/mpl_avg_signal': self.h,
+                'detail/mpl_avg_signal': self.temp['h'],
                 'detail/mpl_signal': h,
                 'detail/uda_factor': uda_factor,
                 'step': self.global_step,
