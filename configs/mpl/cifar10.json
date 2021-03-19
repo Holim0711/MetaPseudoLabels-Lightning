@@ -5,8 +5,8 @@
         "pretrained": false,
         "batch_norm_decay": 0.99,
         "label_smoothing": {
-            "student": 0.1,
-            "teacher": 0.1
+            "student": 0.2,
+            "teacher": 0.2
         },
         "dropout_rate": {
             "student": 0.35, 
@@ -15,7 +15,7 @@
         "UDA": {
             "threshold": 0.8,
             "temperatrue": 0.8,
-            "factor": 1.0,
+            "factor": 8.0,
             "warmup_step": 5000
         }
     },
@@ -25,7 +25,7 @@
         "num_labeled": 4000,
         "batch_size": {
             "labeled": 128,
-            "unlabeled": 128
+            "unlabeled": 896
         }
     },
     "optim": {
@@ -55,7 +55,7 @@
             "scheduler":{
                 "name": "CosineAnnealingWarmUp",
                 "T_max": 300000,
-                "T_warm": 2000    
+                "T_warm": 5000
             },
             "interval": "step"
          }

@@ -6,7 +6,7 @@ from holim_lightning.schedulers import get_sched
 
 
 class LabelSmoothedCrossEntropy(torch.nn.Module):
-    def __init__(self, alpha=0.1):
+    def __init__(self, alpha=0.15):
         super().__init__()
         self.alpha = alpha
 
@@ -19,7 +19,7 @@ class LabelSmoothedCrossEntropy(torch.nn.Module):
 
 
 class UDACrossEntropy(torch.nn.Module):
-    def __init__(self, threshold=0.8, temperature=0.8):
+    def __init__(self, threshold=0.6, temperature=0.7):
         super().__init__()
         self.threshold = threshold
         self.temperature = temperature
@@ -54,7 +54,7 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
         self.teacher_valid_acc = pl.metrics.Accuracy()
         self.student_valid_acc = pl.metrics.Accuracy()
         self.test_acc = pl.metrics.Accuracy()
-        self.temp = {}
+        self.temp = {'h': 0}
 
     def forward(self, x):
         return self.student(x).softmax(dim=1)
@@ -79,7 +79,7 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             self.teacher.train()
             self.temp['pseudo_labels'] = ᵗyᵤ
 
-            ˢzᵤ = self.student(xᵤ)
+            ˢzᵤ = self.student(ʳxᵤ)
             loss = self.LS_CE(ˢzᵤ, ᵗyᵤ)
             return {'loss': loss, **self.temp}
 
@@ -95,12 +95,20 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             self.temp['student_loss_l_new'] = ˢlossₗ.item()
 
             h = self.temp['student_loss_l_old'] - ˢlossₗ
+            self.h = 0.99 * self.h + 0.01 * h
+            h = h - self.h
 
-            ᵗzᵤ = self.teacher(xᵤ)
-            loss_mpl = h * self.CE(ᵗzᵤ, self.temp['pseudo_labels'])
+            self.teacher.eval()
+            with torch.no_grad():
+                ᵗzᵤ = self.teacher(xᵤ)
+            self.teacher.train()
 
             ʳzᵤ = self.teacher(ʳxᵤ)
+ 
+            loss_mpl = self.CE(ʳzᵤ, self.temp['pseudo_labels'])
+ 
             loss_uda = self.UDA_CE(ᵗzᵤ, ʳzᵤ)
+ 
             uda_factor = self.hparams.model['UDA']['factor'] * min(
                 1., self.global_step / self.hparams.model['UDA']['warmup_step'])
 
@@ -108,12 +116,17 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             loss_sup = self.LS_CE(ᵗzₗ, yₗ)
 
             self.teacher_train_acc.update(ᵗzₗ.softmax(dim=1), yₗ)
+            self.log_dict({
+                'detail/mpl_avg_signal': self.h,
+                'detail/mpl_signal': h,
+                'detail/uda_factor': uda_factor,
+                'step': self.global_step,
+            })
             return {
-                'loss': loss_sup + loss_mpl + uda_factor * loss_uda,
+                'loss': loss_sup + h * loss_mpl + uda_factor * loss_uda,
                 'loss_sup': loss_sup,
                 'loss_mpl': loss_mpl,
                 'loss_uda': loss_uda,
-                'uda_factor': uda_factor,
                 **self.temp
             }
 
