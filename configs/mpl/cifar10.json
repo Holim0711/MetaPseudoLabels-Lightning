@@ -5,12 +5,12 @@
         "pretrained": false,
         "batch_norm_decay": 0.99,
         "label_smoothing": {
-            "student": 0.2,
-            "teacher": 0.2
+            "student": 0.15,
+            "teacher": 0.15
         },
         "dropout_rate": {
-            "student": 0.35, 
-            "teacher": 0.5
+            "student": 0.2,
+            "teacher": 0.2
         },
         "UDA": {
             "threshold": 0.8,
