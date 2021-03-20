@@ -13,10 +13,10 @@
             "teacher": 0.2
         },
         "UDA": {
-            "threshold": 0.8,
-            "temperatrue": 0.8,
+            "threshold": 0.6,
+            "temperature": 0.7,
             "factor": 8.0,
-            "warmup_step": 5000
+            "warmup": 5000
         }
     },
     "dataset": {

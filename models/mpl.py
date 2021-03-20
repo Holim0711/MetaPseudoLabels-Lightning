@@ -6,30 +6,29 @@ from holim_lightning.schedulers import get_sched
 
 
 class LabelSmoothedCrossEntropy(torch.nn.Module):
-    def __init__(self, alpha=0.15):
+    def __init__(self, epsilon):
         super().__init__()
-        self.alpha = alpha
+        self.epsilon = epsilon
 
     def forward(self, logits, labels):
         num_classes = logits.shape[-1]
-        alpha_div_k = self.alpha / num_classes
-        target_probs = torch.nn.functional.one_hot(labels, num_classes=num_classes).float() * (1. - self.alpha) + alpha_div_k
+        epsilon_div_k = self.epsilon / num_classes
+        target_probs = torch.nn.functional.one_hot(labels, num_classes=num_classes).float() * (1. - self.epsilon) + epsilon_div_k
         loss = -(target_probs * torch.log_softmax(logits, dim=-1)).sum(dim=-1)
         return loss.mean()
 
 
 class UDACrossEntropy(torch.nn.Module):
-    def __init__(self, threshold=0.6, temperature=0.7):
+    def __init__(self, temperature, threshold):
         super().__init__()
         self.threshold = threshold
         self.temperature = temperature
 
     def forward(self, logits_w, logits_s):
-        logits_w = logits_w.detach()
-        pseudo_labels = torch.softmax(logits_w / self.temperature, dim=-1)
-        masks = torch.max(pseudo_labels, dim=-1)[0].ge(self.threshold).float()
+        soft_labels = torch.softmax(logits_w / self.temperature, dim=-1)
+        masks = torch.max(soft_labels, dim=-1)[0].ge(self.threshold).float()
         log_exp = torch.log_softmax(logits_s, dim=-1)
-        return -torch.mean((pseudo_labels * log_exp).sum(dim=-1) * masks)
+        return -torch.mean((soft_labels * log_exp).sum(dim=-1) * masks)
 
 
 class MetaPseudoLabelsClassifier(pl.LightningModule):
@@ -47,8 +46,13 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             self.hparams.model['num_classes'],
             pretrained=self.hparams.model['pretrained'])
         self.CE = torch.nn.CrossEntropyLoss()
-        self.LS_CE = LabelSmoothedCrossEntropy()
-        self.UDA_CE = UDACrossEntropy()
+        self.student_LS_CE = LabelSmoothedCrossEntropy(
+            epsilon=self.hparams.model['label_smoothing']['student'])
+        self.teacher_LS_CE = LabelSmoothedCrossEntropy(
+            epsilon=self.hparams.model['label_smoothing']['teacher'])
+        self.UDA_CE = UDACrossEntropy(
+            temperature=self.hparams.model['UDA']['temperature'],
+            threshold=self.hparams.model['UDA']['threshold'])
         self.teacher_train_acc = pl.metrics.Accuracy()
         self.student_train_acc = pl.metrics.Accuracy()
         self.teacher_valid_acc = pl.metrics.Accuracy()
@@ -74,13 +78,14 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
 
             self.teacher.eval()
             with torch.no_grad():
-                ᵗỹᵤ = self.teacher(xᵤ).softmax(dim=1)
-                ᵗyᵤ = torch.distributions.Categorical(ᵗỹᵤ).sample()
+                ᵗyᵤ = self.teacher(xᵤ).argmax(dim=-1)
+                #ᵗỹᵤ = self.teacher(xᵤ).softmax(dim=1)
+                #ᵗyᵤ = torch.distributions.Categorical(ᵗỹᵤ).sample()
             self.teacher.train()
             self.temp['pseudo_labels'] = ᵗyᵤ
 
             ˢzᵤ = self.student(ʳxᵤ)
-            loss = self.LS_CE(ˢzᵤ, ᵗyᵤ)
+            loss = self.student_LS_CE(ˢzᵤ, ᵗyᵤ)
             return {'loss': loss, **self.temp}
 
         elif optimizer_idx == 1:
@@ -94,36 +99,42 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             self.student.train()
             self.temp['student_loss_l_new'] = ˢlossₗ.item()
 
-            h = self.temp['student_loss_l_old'] - ˢlossₗ
-            self.temp['h'] = 0.99 * self.temp['h'] + 0.01 * h
-            h = h - self.temp['h']
+            mpl_signal = self.temp['student_loss_l_old'] - self.temp['student_loss_l_new']
+            # self.temp['h'] = 0.99 * self.temp['h'] + 0.01 * mpl_signal
+            # h = h - self.temp['h']
 
-            self.teacher.eval()
-            with torch.no_grad():
-                ᵗzᵤ = self.teacher(xᵤ)
-            self.teacher.train()
+            uda_factor = self.hparams.model['UDA']['factor'] * min(
+                1., self.global_step / self.hparams.model['UDA']['warmup'])
 
-            ʳzᵤ = self.teacher(ʳxᵤ)
- 
+            #self.teacher.eval()
+            #with torch.no_grad():
+            #    ᵗzᵤ = self.teacher(xᵤ)
+            #self.teacher.train()
+            #ʳzᵤ = self.teacher(ʳxᵤ)
+
+            batch_size = xₗ.shape[0]
+            x = torch.cat((xₗ, xᵤ, ʳxᵤ))
+            ᵗz = self.teacher(x)
+            ᵗzₗ = ᵗz[:batch_size]
+            ᵗzᵤ, ʳzᵤ = ᵗz[batch_size:].chunk(2)
+            del ᵗz
+
             loss_mpl = self.CE(ʳzᵤ, self.temp['pseudo_labels'])
  
-            loss_uda = self.UDA_CE(ᵗzᵤ, ʳzᵤ)
+            loss_uda = self.UDA_CE(ᵗzᵤ.clone().detach(), ʳzᵤ)
  
-            uda_factor = self.hparams.model['UDA']['factor'] * min(
-                1., self.global_step / self.hparams.model['UDA']['warmup_step'])
-
-            ᵗzₗ = self.teacher(xₗ)
-            loss_sup = self.LS_CE(ᵗzₗ, yₗ)
-
+            #ᵗzₗ = self.teacher(xₗ)
+            loss_sup = self.teacher_LS_CE(ᵗzₗ, yₗ)
             self.teacher_train_acc.update(ᵗzₗ.softmax(dim=1), yₗ)
+
             self.log_dict({
-                'detail/mpl_avg_signal': self.temp['h'],
-                'detail/mpl_signal': h,
+                #'detail/mpl_avg_signal': self.temp['h'],
+                'detail/mpl_signal': mpl_signal,
                 'detail/uda_factor': uda_factor,
                 'step': self.global_step,
             })
             return {
-                'loss': loss_sup + h * loss_mpl + uda_factor * loss_uda,
+                'loss': loss_sup + mpl_signal * loss_mpl + uda_factor * loss_uda,
                 'loss_sup': loss_sup,
                 'loss_mpl': loss_mpl,
                 'loss_uda': loss_uda,
