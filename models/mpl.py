@@ -3,6 +3,35 @@ import pytorch_lightning as pl
 from holim_lightning.models import get_model
 from holim_lightning.optimizers import get_optim
 from holim_lightning.schedulers import get_sched
+from copy import deepcopy
+
+
+class ModelEMA(torch.nn.Module):
+    def __init__(self, model, decay=0.995, device=None):
+        super().__init__()
+        self.module = deepcopy(model)
+        self.module.eval()
+        self.decay = decay
+        self.device = device
+        if self.device is not None:
+            self.module.to(device=device)
+
+    def forward(self, input):
+        return self.module(input)
+
+    def _update(self, model, update_fn):
+        with torch.no_grad():
+            for ema_v, model_v in zip(self.module.parameters(), model.parameters()):
+                if self.device is not None:
+                    model_v = model_v.to(device=self.device)
+                ema_v.copy_(update_fn(ema_v, model_v))
+            for ema_v, model_v in zip(self.module.buffers(), model.buffers()):
+                if self.device is not None:
+                    model_v = model_v.to(device=self.device)
+                ema_v.copy_(model_v)
+
+    def update_parameters(self, model):
+        self._update(model, update_fn=lambda e, m: self.decay * e + (1. - self.decay) * m)
 
 
 class LabelSmoothedCrossEntropy(torch.nn.Module):
@@ -45,6 +74,7 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             self.hparams.model['backbone'],
             self.hparams.model['num_classes'],
             pretrained=self.hparams.model['pretrained'])
+        self.ema = ModelEMA(self.student)
         self.CE = torch.nn.CrossEntropyLoss()
         self.student_LS_CE = LabelSmoothedCrossEntropy(
             epsilon=self.hparams.model['label_smoothing']['student'])
@@ -57,11 +87,13 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
         self.student_train_acc = pl.metrics.Accuracy()
         self.teacher_valid_acc = pl.metrics.Accuracy()
         self.student_valid_acc = pl.metrics.Accuracy()
+        self.ema_valid_acc = pl.metrics.Accuracy()
         self.test_acc = pl.metrics.Accuracy()
         self.temp = {'h': 0}
 
     def forward(self, x):
-        return self.student(x).softmax(dim=1)
+        #return self.student(x).softmax(dim=1)
+        return self.ema(x).softmax(dim=1)
 
     def training_step(self, batch, batch_idx, optimizer_idx):
         if optimizer_idx == 0:
@@ -162,6 +194,10 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
         self.teacher_train_acc.reset()
         self.student_train_acc.reset()
 
+    def optimizer_step(self, *args, **kwargs):
+        super().optimizer_step(*args, **kwargs)
+        self.ema.update_parameters(self.student)
+
     def validation_step(self, batch, batch_idx):
         x, y = batch
         ᵗz = self.teacher(x)
@@ -170,22 +206,30 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
         ˢz = self.student(x)
         ˢloss = self.CE(ˢz, y)
         self.student_valid_acc.update(ˢz.softmax(dim=1), y)
-        return {'teacher_loss': ᵗloss, 'student_loss': ˢloss}
+        z = self.ema(x)
+        loss = self.CE(z, y)
+        self.ema_valid_acc.update(z.softmax(dim=1), y)
+        return {'teacher_loss': ᵗloss, 'student_loss': ˢloss, 'ema_loss': loss}
 
     def validation_epoch_end(self, outputs):
         teacher_loss = torch.stack([x['teacher_loss'] for x in outputs]).mean()
         stduent_loss = torch.stack([x['student_loss'] for x in outputs]).mean()
+        ema_loss = torch.stack([x['ema_loss'] for x in outputs]).mean()
         teacher_acc = self.teacher_valid_acc.compute()
         studnet_acc = self.student_valid_acc.compute()
+        ema_acc = self.ema_valid_acc.compute()
         self.log_dict({
-            'val/loss': stduent_loss,
-            'val/acc': studnet_acc,
+            'val/loss': ema_loss,
+            'val/acc': ema_acc,
+            'val/studnet/loss': stduent_loss,
+            'val/studnet/acc': studnet_acc,
             'val/teacher/loss': teacher_loss,
             'val/teacher/acc': teacher_acc,
             'step': self.current_epoch,
         })
         self.teacher_valid_acc.reset()
         self.student_valid_acc.reset()
+        self.ema_valid_acc.reset()
 
     def test_step(self, batch, batch_idx):
         x, y = batch
