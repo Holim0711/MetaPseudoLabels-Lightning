@@ -3,61 +3,70 @@ import pytorch_lightning as pl
 from holim_lightning.models import get_model
 from holim_lightning.optimizers import get_optim
 from holim_lightning.schedulers import get_sched
-from copy import deepcopy
 
 
-class ModelEMA(torch.nn.Module):
-    def __init__(self, model, decay=0.995, device=None):
-        super().__init__()
-        self.module = deepcopy(model)
-        self.module.eval()
+class EMAModel(torch.optim.swa_utils.AveragedModel):
+
+    def __init__(self, model, decay=0.9999, device=None):
         self.decay = decay
-        self.device = device
-        if self.device is not None:
-            self.module.to(device=device)
-
-    def forward(self, input):
-        return self.module(input)
-
-    def _update(self, model, update_fn):
-        with torch.no_grad():
-            for ema_v, model_v in zip(self.module.parameters(), model.parameters()):
-                if self.device is not None:
-                    model_v = model_v.to(device=self.device)
-                ema_v.copy_(update_fn(ema_v, model_v))
-            for ema_v, model_v in zip(self.module.buffers(), model.buffers()):
-                if self.device is not None:
-                    model_v = model_v.to(device=self.device)
-                ema_v.copy_(model_v)
+        def ema_fn(p_swa, p_model, n):
+            return self.decay * p_swa + (1. - self.decay) * p_model
+        super().__init__(model, device, ema_fn)
 
     def update_parameters(self, model):
-        self._update(model, update_fn=lambda e, m: self.decay * e + (1. - self.decay) * m)
+        super().update_parameters(model)
+        for b_swa, b_model in zip(self.module.buffers(), model.buffers()):
+            device = b_swa.device
+            b_model_ = b_model.detach().to(device)
+            if self.n_averaged == 0:
+                b_swa.detach().copy_(b_model_)
+            else:
+                b_swa.detach().copy_(self.avg_fn(b_swa.detach(), b_model_,
+                                                 self.n_averaged.to(device)))
 
 
 class LabelSmoothedCrossEntropy(torch.nn.Module):
-    def __init__(self, epsilon):
-        super().__init__()
-        self.epsilon = epsilon
 
-    def forward(self, logits, labels):
-        num_classes = logits.shape[-1]
-        epsilon_div_k = self.epsilon / num_classes
-        target_probs = torch.nn.functional.one_hot(labels, num_classes=num_classes).float() * (1. - self.epsilon) + epsilon_div_k
-        loss = -(target_probs * torch.log_softmax(logits, dim=-1)).sum(dim=-1)
-        return loss.mean()
+    def __init__(self, ε=0.0, reduction='mean'):
+        super().__init__()
+        self.ε = ε
+        self.reduction = reduction
+
+    def forward(self, input, target):
+        log_prob = input.log_softmax(dim=-1)
+        weight = input.new_ones(input.size()) * self.ε / (input.size(-1) - 1.)
+        weight.scatter_(-1, target.unsqueeze(-1), (1. - self.ε))
+
+        loss = -(weight * log_prob).sum(dim=-1)
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        return loss
 
 
 class UDACrossEntropy(torch.nn.Module):
-    def __init__(self, temperature, threshold):
+    def __init__(self, temperature, threshold, reduction='mean'):
         super().__init__()
         self.threshold = threshold
         self.temperature = temperature
+        self.reduction = reduction
+        self.𝜇ₘₐₛₖ = None
 
-    def forward(self, logits_w, logits_s):
-        soft_labels = torch.softmax(logits_w / self.temperature, dim=-1)
-        masks = torch.max(soft_labels, dim=-1)[0].ge(self.threshold).float()
-        log_exp = torch.log_softmax(logits_s, dim=-1)
-        return -torch.mean((soft_labels * log_exp).sum(dim=-1) * masks)
+    def forward(self, logits_s, logits_w):
+        log_prob = logits_s.log_softmax(dim=-1)
+        weight = torch.softmax(logits_w / self.temperature, dim=-1)
+        masks = (weight.max(dim=-1)[0] > self.threshold).float()
+
+        loss = -(weight * log_prob).sum(dim=-1) * masks
+        self.𝜇ₘₐₛₖ = masks.mean().item()
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        return loss
 
 
 class MetaPseudoLabelsClassifier(pl.LightningModule):
@@ -74,12 +83,12 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             self.hparams.model['backbone'],
             self.hparams.model['num_classes'],
             pretrained=self.hparams.model['pretrained'])
-        self.ema = ModelEMA(self.student)
+        self.ema = EMAModel(self.student, self.hparams.model['EMA']['decay'])
         self.CE = torch.nn.CrossEntropyLoss()
         self.student_LS_CE = LabelSmoothedCrossEntropy(
-            epsilon=self.hparams.model['label_smoothing']['student'])
+            ε=self.hparams.model['label_smoothing']['student'])
         self.teacher_LS_CE = LabelSmoothedCrossEntropy(
-            epsilon=self.hparams.model['label_smoothing']['teacher'])
+            ε=self.hparams.model['label_smoothing']['teacher'])
         self.UDA_CE = UDACrossEntropy(
             temperature=self.hparams.model['UDA']['temperature'],
             threshold=self.hparams.model['UDA']['threshold'])
@@ -89,10 +98,9 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
         self.student_valid_acc = pl.metrics.Accuracy()
         self.ema_valid_acc = pl.metrics.Accuracy()
         self.test_acc = pl.metrics.Accuracy()
-        self.temp = {'h': 0}
+        self.tmp = {'𝜇ₕ': 0}
 
     def forward(self, x):
-        #return self.student(x).softmax(dim=1)
         return self.ema(x).softmax(dim=1)
 
     def training_step(self, batch, batch_idx, optimizer_idx):
@@ -102,23 +110,18 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
 
             self.student.eval()
             with torch.no_grad():
-                ˢzₗ = self.student(xₗ)
-                ˢlossₗ = self.CE(ˢzₗ, yₗ)
+                self.tmp['s_lossₗ'] = self.CE(self.student(xₗ), yₗ)
             self.student.train()
-            self.temp['student_loss_l_old'] = ˢlossₗ.item()
-            self.student_train_acc.update(ˢzₗ.softmax(dim=1), yₗ)
 
             self.teacher.eval()
             with torch.no_grad():
-                ᵗyᵤ = self.teacher(xᵤ).argmax(dim=-1)
-                #ᵗỹᵤ = self.teacher(xᵤ).softmax(dim=1)
-                #ᵗyᵤ = torch.distributions.Categorical(ᵗỹᵤ).sample()
+                ŷᵤ = self.tmp['ŷᵤ'] = self.teacher(xᵤ).argmax(dim=-1)
             self.teacher.train()
-            self.temp['pseudo_labels'] = ᵗyᵤ
 
-            ˢzᵤ = self.student(ʳxᵤ)
-            loss = self.student_LS_CE(ˢzᵤ, ᵗyᵤ)
-            return {'loss': loss, **self.temp}
+            zᵤ = self.student(ʳxᵤ)
+            loss = self.student_LS_CE(zᵤ, ŷᵤ)
+            self.student_train_acc.update(zᵤ.softmax(dim=1), ŷᵤ)
+            return {'loss': loss, **self.tmp}
 
         elif optimizer_idx == 1:
             xₗ, yₗ = batch['labeled']
@@ -126,52 +129,47 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
 
             self.student.eval()
             with torch.no_grad():
-                ˢzₗ = self.student(xₗ)
-                ˢlossₗ = self.CE(ˢzₗ, yₗ)
+                self.tmp['ś_lossₗ'] = self.CE(self.student(xₗ), yₗ)
             self.student.train()
-            self.temp['student_loss_l_new'] = ˢlossₗ.item()
 
-            mpl_signal = self.temp['student_loss_l_old'] - self.temp['student_loss_l_new']
-            # self.temp['h'] = 0.99 * self.temp['h'] + 0.01 * mpl_signal
-            # h = h - self.temp['h']
+            h = self.tmp['s_lossₗ'] - self.tmp['ś_lossₗ']
+            self.tmp['𝜇ₕ'] = 0.99 * self.tmp['𝜇ₕ'] + 0.01 * h
+            h -= self.tmp['𝜇ₕ']
 
-            uda_factor = self.hparams.model['UDA']['factor'] * min(
+            λ = self.hparams.model['UDA']['factor'] * min(
                 1., self.global_step / self.hparams.model['UDA']['warmup'])
 
-            #self.teacher.eval()
-            #with torch.no_grad():
-            #    ᵗzᵤ = self.teacher(xᵤ)
-            #self.teacher.train()
-            #ʳzᵤ = self.teacher(ʳxᵤ)
-
-            batch_size = xₗ.shape[0]
-            x = torch.cat((xₗ, xᵤ, ʳxᵤ))
-            ᵗz = self.teacher(x)
-            ᵗzₗ = ᵗz[:batch_size]
-            ᵗzᵤ, ʳzᵤ = ᵗz[batch_size:].chunk(2)
+            ᵗz = self.teacher(torch.cat((xₗ, xᵤ, ʳxᵤ)))
+            ᵗzₗ = ᵗz[:xₗ.shape[0]]
+            ᵗzᵤ, ʳzᵤ = ᵗz[xₗ.shape[0]:].chunk(2)
             del ᵗz
 
-            loss_mpl = self.CE(ʳzᵤ, self.temp['pseudo_labels'])
+            loss_mpl = self.CE(ʳzᵤ, self.tmp['ŷᵤ'])
  
-            loss_uda = self.UDA_CE(ᵗzᵤ.clone().detach(), ʳzᵤ)
+            loss_uda = self.UDA_CE(ʳzᵤ, ᵗzᵤ.clone().detach())
  
-            #ᵗzₗ = self.teacher(xₗ)
             loss_sup = self.teacher_LS_CE(ᵗzₗ, yₗ)
             self.teacher_train_acc.update(ᵗzₗ.softmax(dim=1), yₗ)
 
             self.log_dict({
-                #'detail/mpl_avg_signal': self.temp['h'],
-                'detail/mpl_signal': mpl_signal,
-                'detail/uda_factor': uda_factor,
+                'detail/avg_mpl_signal': self.tmp['𝜇ₕ'],
+                'detail/mpl_signal': h,
+                'detail/uda_factor': λ,
+                'detail/uda_mask': self.UDA_CE.𝜇ₘₐₛₖ,
                 'step': self.global_step,
             })
             return {
-                'loss': loss_sup + mpl_signal * loss_mpl + uda_factor * loss_uda,
+                'loss': loss_sup + h * loss_mpl + λ * loss_uda,
                 'loss_sup': loss_sup,
                 'loss_mpl': loss_mpl,
                 'loss_uda': loss_uda,
-                **self.temp
+                **self.tmp
             }
+
+    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx, *args, **kwargs):
+        super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, *args, **kwargs)
+        if optimizer_idx == 0:
+            self.ema.update_parameters(self.student)
 
     def training_epoch_end(self, outputs):
         teacher_loss = torch.stack([x['loss'] for x in outputs[1]]).mean()
@@ -182,8 +180,8 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
         loss_mpl = torch.stack([x['loss_mpl'] for x in outputs[1]]).mean()
         loss_uda = torch.stack([x['loss_uda'] for x in outputs[1]]).mean()
         self.log_dict({
-            'train/loss': student_loss,
-            'train/acc': student_acc,
+            'train/student/loss': student_loss,
+            'train/student/acc': student_acc,
             'train/teacher/loss': teacher_loss,
             'train/teacher/acc': teacher_acc,
             'detail/loss/sup': loss_sup,
@@ -193,10 +191,6 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
         })
         self.teacher_train_acc.reset()
         self.student_train_acc.reset()
-
-    def optimizer_step(self, *args, **kwargs):
-        super().optimizer_step(*args, **kwargs)
-        self.ema.update_parameters(self.student)
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
