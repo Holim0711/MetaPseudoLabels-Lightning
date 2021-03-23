@@ -136,8 +136,8 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
             self.tmp['𝜇ₕ'] = 0.99 * self.tmp['𝜇ₕ'] + 0.01 * h
             h -= self.tmp['𝜇ₕ']
 
-            λ = self.hparams.model['UDA']['factor'] * min(
-                1., self.global_step / self.hparams.model['UDA']['warmup'])
+            λ = self.hparams.model['UDA']['factor']
+            λ *= min(1., self.global_step / self.hparams.model['UDA']['warmup'])
 
             ᵗz = self.teacher(torch.cat((xₗ, xᵤ, ʳxᵤ)))
             ᵗzₗ = ᵗz[:xₗ.shape[0]]
