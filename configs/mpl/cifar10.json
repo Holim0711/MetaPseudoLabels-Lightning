@@ -17,6 +17,9 @@
             "temperature": 0.7,
             "factor": 8.0,
             "warmup": 5000
+        },
+        "EMA": {
+            "decay": 0.995
         }
     },
     "dataset": {
@@ -32,7 +35,7 @@
         "student": {
             "optimizer": {
                 "name": "SGD",
-                "lr": 0.05,
+                "lr": 0.065,
                 "momentum": 0.9,
                 "weight_decay": 0.0005,
                 "nesterov": true
@@ -62,6 +65,7 @@
          }
     },
    "trainer": {
-        "max_steps": 300000
+        "max_steps": 300000,
+        "check_val_every_n_epoch": 1000
     }
 }
