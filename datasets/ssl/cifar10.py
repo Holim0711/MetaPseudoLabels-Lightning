@@ -56,11 +56,6 @@ class SSL_CIFAR10(pl.LightningDataModule):
 
         train_idxₗ, train_idxᵤ = index_split(cifar10_train.targets, self.num_labeled)
 
-        # expand train_idxₗ to match the number of batch iteration
-        n_iter = (len(train_idxᵤ) - 1) // self.batch_sizeᵤ + 1
-        expand = ((n_iter * self.batch_sizeₗ) - 1) // len(train_idxₗ) + 1
-        train_idxₗ = [i for _ in range(expand) for i in train_idxₗ]
-
         self.cifar10_trainₗ = SubsetCIFAR10(
             self.root, train_idxₗ, train=True, transform=self.train_transformₗ)
         self.cifar10_trainᵤ = SubsetCIFAR10(

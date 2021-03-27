@@ -1,22 +1,17 @@
 {
     "model": {
-        "backbone": "wide_resnet28_2",
-        "num_classes": 10,
-        "pretrained": false,
-        "batch_norm_decay": 0.99,
         "label_smoothing": {
-            "student": 0.1,
-            "teacher": 0.1
-        },
-        "dropout_rate": {
-            "student": 0.35, 
-            "teacher": 0.5
+            "student": 0.15,
+            "teacher": 0.15
         },
         "UDA": {
-            "threshold": 0.8,
-            "temperatrue": 0.8,
-            "factor": 1.0,
-            "warmup_step": 5000
+            "threshold": 0.6,
+            "temperature": 0.7,
+            "factor": 8.0,
+            "warmup": 5000
+        },
+        "EMA": {
+            "decay": 0.995
         }
     },
     "dataset": {
@@ -25,14 +20,14 @@
         "num_labeled": 4000,
         "batch_size": {
             "labeled": 128,
-            "unlabeled": 128
+            "unlabeled": 896
         }
     },
     "optim": {
         "student": {
             "optimizer": {
                 "name": "SGD",
-                "lr": 0.05,
+                "lr": 0.065,
                 "momentum": 0.9,
                 "weight_decay": 0.0005,
                 "nesterov": true
@@ -40,7 +35,8 @@
             "scheduler": {
                 "name": "CosineAnnealingWarmUp",
                 "T_max": 300000,
-                "T_warm": 2000
+                "T_warm": 5000,
+                "T_mute": 3000
             },
             "interval": "step"
         },
@@ -55,7 +51,7 @@
             "scheduler":{
                 "name": "CosineAnnealingWarmUp",
                 "T_max": 300000,
-                "T_warm": 2000    
+                "T_warm": 5000
             },
             "interval": "step"
          }
