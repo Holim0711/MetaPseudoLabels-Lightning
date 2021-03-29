@@ -2,7 +2,7 @@ import torch
 import pytorch_lightning as pl
 from holim_lightning.optimizers import get_optim
 from holim_lightning.schedulers import get_sched
-from holim_lightning.models.custom.wrn28 import build_wide_resnet28
+from holim_lightning.models.custom.wrn28_tf import build_wide_resnet28_tf
 
 from .ema import EMAModel
 from .losses import LabelSmoothedCrossEntropy, UDACrossEntropy
@@ -19,10 +19,10 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        self.teacher = build_wide_resnet28(
-            'wide_resnet28_2', 10, dense_dropout=0.2, norm_layer=MPLBatchNorm)
-        self.student = build_wide_resnet28(
-            'wide_resnet28_2', 10, dense_dropout=0.2, norm_layer=MPLBatchNorm)
+        self.teacher = build_wide_resnet28_tf(
+            'wide_resnet28_2_tf', 10, dense_dropout=0.5, norm_layer=MPLBatchNorm)
+        self.student = build_wide_resnet28_tf(
+            'wide_resnet28_2_tf', 10, dense_dropout=0.5, norm_layer=MPLBatchNorm)
         self.ema = EMAModel(self.student, self.hparams.model['EMA']['decay'])
         self.CE = torch.nn.CrossEntropyLoss()
         self.student_LS_CE = LabelSmoothedCrossEntropy(
