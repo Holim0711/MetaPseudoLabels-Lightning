@@ -22,7 +22,7 @@ class MetaPseudoLabelsClassifier(pl.LightningModule):
         self.teacher = build_wide_resnet28_tf(
             'wide_resnet28_2_tf', 10, dense_dropout=0.5, norm_layer=MPLBatchNorm)
         self.student = build_wide_resnet28_tf(
-            'wide_resnet28_2_tf', 10, dense_dropout=0.5, norm_layer=MPLBatchNorm)
+            'wide_resnet28_2_tf', 10, dense_dropout=0.35, norm_layer=MPLBatchNorm)
         self.ema = EMAModel(self.student, self.hparams.model['EMA']['decay'])
         self.CE = torch.nn.CrossEntropyLoss()
         self.student_LS_CE = LabelSmoothedCrossEntropy(
